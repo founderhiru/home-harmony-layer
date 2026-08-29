@@ -150,6 +150,22 @@
     background: var(--accent);
     color: var(--accent-foreground);
   }
+
+  /* Native app shell (Capacitor): respect notches and disable browser-ish behaviours */
+  .is-native body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .is-native input,
+  .is-native textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
 
 @utility font-display {

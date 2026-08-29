@@ -11,6 +11,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { NativeShell } from "../components/native-shell";
 
 function NotFoundComponent() {
   return (
@@ -76,7 +77,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
   head: () => ({
     meta: [
       { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1" },
+      {
+        name: "viewport",
+        content:
+          "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover",
+      },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "theme-color", content: "#FBF9F5" },
       { name: "author", content: "Daylatch" },
       { name: "twitter:site", content: "@Lovable" },
     ],
@@ -120,6 +127,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <NativeShell />
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
     </QueryClientProvider>
