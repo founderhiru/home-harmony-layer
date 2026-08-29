@@ -20,7 +20,7 @@ export function Nav() {
             Trust
           </a>
         </nav>
-        <CtaButton className="px-5 py-2 text-[13px]">Try Daylatch</CtaButton>
+        <CtaButton href="/app" className="px-5 py-2 text-[13px]">Open the app</CtaButton>
       </div>
     </header>
   );
@@ -45,7 +45,7 @@ export function Hero() {
               to happen next.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
-              <CtaButton>Try Daylatch</CtaButton>
+              <CtaButton href="/app">Open the app</CtaButton>
               <CtaButton variant="ghost" href="#how">
                 See how it works
               </CtaButton>
@@ -443,7 +443,7 @@ export function FinalCta() {
           who decides.
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
-          <CtaButton>Try Daylatch</CtaButton>
+          <CtaButton href="/app">Open the app</CtaButton>
           <CtaButton variant="ghost" href="#how">
             See how it works
           </CtaButton>
