@@ -1,246 +1,464 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Avatar, Chip, StatusDot } from "./primitives";
-import { CATEGORY_LABEL, OWNERS, useItems, type Item, type Status } from "@/lib/daylatch-store";
+import { Avatar, StatusDot } from "./primitives";
+import {
+  CATEGORY_LABEL,
+  CURRENT_USER,
+  HOUSEHOLD_NAME,
+  MEMBERS,
+  OWNERS,
+  UNASSIGNED,
+  classify,
+  useItems,
+  type Activity,
+  type Draft,
+  type Item,
+} from "@/lib/daylatch-store";
 import { cn } from "@/lib/utils";
 
-type Tab = "today" | "waiting" | "approvals" | "household";
+type Screen = "home" | "household" | "activity";
 
-const TABS: { id: Tab; label: string; glyph: string }[] = [
-  { id: "today", label: "Today", glyph: "◎" },
-  { id: "waiting", label: "Waiting", glyph: "◔" },
-  { id: "approvals", label: "Approvals", glyph: "✓" },
-  { id: "household", label: "House", glyph: "⌂" },
-];
-
-function statusLabel(s: Status) {
-  return s === "attention" ? "Needs attention" : s === "waiting" ? "Waiting" : "Handled";
+function greeting() {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
 }
 
-function ItemCard({ item, onOpen }: { item: Item; onOpen: () => void }) {
+/* ---------------------------------- rows --------------------------------- */
+
+function Row({ item, onOpen }: { item: Item; onOpen: () => void }) {
   return (
     <button
       onClick={onOpen}
       className="w-full rounded-2xl border border-border bg-surface-raised px-4 py-3.5 text-left shadow-card transition-transform active:scale-[0.985]"
     >
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
         <div className="min-w-0">
-          <p className="flex items-center gap-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-            <StatusDot tone={item.status} />
-            {CATEGORY_LABEL[item.category]}
-          </p>
           <p
             className={cn(
-              "mt-1.5 truncate text-[15px] font-medium",
+              "truncate text-[15px] font-medium",
               item.status === "handled" && "text-muted-foreground line-through decoration-border",
             )}
           >
             {item.title}
           </p>
-          <p className="mt-0.5 truncate text-[12.5px] text-muted-foreground">{item.meta}</p>
+          <p className="mt-0.5 truncate text-[12.5px] text-muted-foreground">
+            {[item.amount, item.due ? `Due ${item.due}` : null].filter(Boolean).join(" · ") ||
+              item.meta}
+          </p>
+          <p className="mt-2 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+            <Avatar name={item.owner === UNASSIGNED ? "?" : item.owner} />
+            {item.owner}
+          </p>
         </div>
-        <span className="flex shrink-0 flex-col items-end gap-1.5">
-          <Avatar name={item.owner} />
-          {item.due ? <span className="text-[11px] text-muted-foreground">{item.due}</span> : null}
-        </span>
+        <span className="text-muted-foreground">→</span>
       </div>
-      {item.proposal && !item.approved && item.status === "attention" ? (
-        <p className="mt-3 rounded-xl bg-secondary/70 px-3 py-2 text-[12px] text-secondary-foreground">
-          Daylatch suggests: {item.proposal}
-        </p>
-      ) : null}
     </button>
   );
 }
 
-function Sheet({
-  open,
-  onClose,
-  title,
-  children,
-}: {
-  open: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  if (!open) return null;
+function GroupHeader({ label, count }: { label: string; count?: number }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-foreground/35 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="animate-rise relative max-h-[86vh] w-full max-w-md overflow-y-auto rounded-t-3xl border border-border bg-surface-raised p-5 pb-8 shadow-float">
-        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-border" />
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-lg font-semibold tracking-tight">{title}</h2>
-          <button
-            onClick={onClose}
-            className="rounded-full border border-border px-3 py-1 text-[12px] text-muted-foreground"
-          >
-            Close
-          </button>
+    <div className="flex items-center justify-between px-1">
+      <p className="text-[11px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+        {label}
+      </p>
+      {count !== undefined ? (
+        <span className="font-display text-[15px] font-semibold">{count}</span>
+      ) : null}
+    </div>
+  );
+}
+
+/* --------------------------------- capture -------------------------------- */
+
+function Capture({
+  onClose,
+  onSave,
+}: {
+  onClose: () => void;
+  onSave: (draft: Draft) => void;
+}) {
+  const [text, setText] = useState("");
+  const [draft, setDraft] = useState<Draft | null>(null);
+
+  if (draft) {
+    return (
+      <div className="flex min-h-full flex-col px-6 pt-8 pb-10">
+        <button onClick={() => setDraft(null)} className="text-[13px] text-muted-foreground">
+          ←
+        </button>
+        <p className="eyebrow mt-6">I understood this as</p>
+        <h2 className="font-display mt-2 text-[26px] leading-tight font-semibold tracking-tight">
+          {draft.title}
+        </h2>
+
+        <dl className="mt-5 space-y-2.5 border-y border-border py-5 text-[14px]">
+          {draft.amount ? <Field label="Amount" value={draft.amount} /> : null}
+          <Field label="Category" value={CATEGORY_LABEL[draft.category]} />
+          <Field label="Domain" value={draft.domain} />
+          <Field label="Due" value={draft.due ?? "No date"} />
+          <Field label="Next step" value={draft.nextStep} />
+        </dl>
+
+        <p className="mt-6 text-[13px] text-muted-foreground">Who should handle this?</p>
+        <div className="mt-3 space-y-2">
+          {OWNERS.map((o) => (
+            <button
+              key={o}
+              onClick={() => setDraft({ ...draft, owner: o })}
+              className={cn(
+                "w-full rounded-2xl border px-4 py-3 text-left text-[14px] transition-colors",
+                draft.owner === o
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-surface-raised",
+              )}
+            >
+              {o}
+            </button>
+          ))}
         </div>
-        <div className="mt-4">{children}</div>
+
+        <button
+          onClick={() => onSave(draft)}
+          className="mt-8 w-full rounded-full bg-primary px-5 py-3.5 text-[15px] font-medium text-primary-foreground shadow-card"
+        >
+          Save
+        </button>
+        <p className="mt-3 text-center text-[12px] text-muted-foreground">
+          Nothing is created until you save.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-full flex-col px-6 pt-8 pb-10">
+      <button onClick={onClose} className="text-[13px] text-muted-foreground">
+        Cancel
+      </button>
+      <h2 className="font-display mt-8 text-[28px] leading-tight font-semibold tracking-tight">
+        What&apos;s on your plate?
+      </h2>
+      <p className="mt-2 text-[14px] text-muted-foreground">
+        Tell Daylatch what needs to happen.
+      </p>
+      <textarea
+        autoFocus
+        rows={5}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Electricity bill ₹4,820 due next Friday"
+        className="mt-6 w-full resize-none rounded-2xl border border-input bg-surface-raised px-4 py-4 text-[15px] leading-relaxed outline-none focus:border-ring"
+      />
+      <button
+        disabled={!text.trim()}
+        onClick={() => setDraft(classify(text))}
+        className="mt-6 w-full rounded-full bg-primary px-5 py-3.5 text-[15px] font-medium text-primary-foreground shadow-card disabled:opacity-40"
+      >
+        Understand →
+      </button>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-3">
+      <dt className="text-[12.5px] text-muted-foreground">{label}</dt>
+      <dd className="text-[14px]">{value}</dd>
+    </div>
+  );
+}
+
+/* ------------------------------ responsibility ---------------------------- */
+
+function Responsibility({
+  item,
+  onBack,
+  onAssign,
+  onComplete,
+  onReopen,
+}: {
+  item: Item;
+  onBack: () => void;
+  onAssign: (owner: string) => void;
+  onComplete: () => void;
+  onReopen: () => void;
+}) {
+  const [assigning, setAssigning] = useState(false);
+  return (
+    <div className="flex min-h-full flex-col px-6 pt-8 pb-12">
+      <button onClick={onBack} className="w-fit text-[16px] text-muted-foreground">
+        ←
+      </button>
+
+      <h2 className="font-display mt-8 text-[28px] leading-tight font-semibold tracking-tight text-balance">
+        {item.title}
+      </h2>
+      {item.amount ? (
+        <p className="font-display mt-2 text-[22px] font-semibold text-primary">{item.amount}</p>
+      ) : null}
+      <p className="mt-3 text-[14px] text-muted-foreground">
+        {item.due ? `Due ${item.due}` : "No due date"}
+      </p>
+      <p className="text-[14px] text-muted-foreground">{item.domain}</p>
+
+      <div className="mt-7 border-t border-border pt-6">
+        {assigning ? (
+          <div className="space-y-2">
+            {OWNERS.map((o) => (
+              <button
+                key={o}
+                onClick={() => {
+                  onAssign(o);
+                  setAssigning(false);
+                }}
+                className={cn(
+                  "w-full rounded-2xl border px-4 py-3 text-left text-[14px]",
+                  item.owner === o
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-surface-raised",
+                )}
+              >
+                {o}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <button onClick={() => setAssigning(true)} className="flex items-center gap-2 text-left">
+            <Avatar name={item.owner === UNASSIGNED ? "?" : item.owner} />
+            <span className="text-[15px] font-medium">
+              {item.owner === UNASSIGNED ? "Nobody is responsible yet" : `${item.owner} is responsible`}
+            </span>
+          </button>
+        )}
+      </div>
+
+      <div className="mt-7 border-t border-border pt-6">
+        <p className="eyebrow">Next step</p>
+        <p className="mt-2 text-[16px] leading-relaxed">{item.nextStep}</p>
+      </div>
+
+      <p className="mt-7 border-t border-border pt-6 text-[12.5px] text-muted-foreground">
+        Added{" "}
+        {new Date(item.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+        {item.completedAt
+          ? ` · Completed ${new Date(item.completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
+          : ""}
+      </p>
+
+      <div className="mt-auto pt-10">
+        {item.status === "handled" ? (
+          <button
+            onClick={onReopen}
+            className="w-full rounded-full border border-border px-5 py-3.5 text-[15px] font-medium"
+          >
+            Reopen
+          </button>
+        ) : (
+          <button
+            onClick={onComplete}
+            className="w-full rounded-full bg-primary px-5 py-3.5 text-[15px] font-medium text-primary-foreground shadow-card"
+          >
+            Mark complete
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
+/* ---------------------------------- app ---------------------------------- */
+
 export function MobileApp() {
-  const { items, add, update, remove, reset } = useItems();
-  const [tab, setTab] = useState<Tab>("today");
+  const { items, activity, create, assign, complete, reopen, reset } = useItems();
+  const [screen, setScreen] = useState<Screen>("home");
   const [captureOpen, setCaptureOpen] = useState(false);
-  const [draft, setDraft] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const active = items.find((i) => i.id === openId) ?? null;
-
-  const counts = useMemo(
-    () => ({
-      attention: items.filter((i) => i.status === "attention").length,
-      waiting: items.filter((i) => i.status === "waiting").length,
-      approvals: items.filter((i) => i.status === "attention" && i.proposal && !i.approved).length,
-    }),
-    [items],
-  );
 
   function flash(msg: string) {
     setToast(msg);
     window.setTimeout(() => setToast(null), 2200);
   }
 
-  function submitCapture() {
-    const text = draft.trim();
-    if (!text) return;
-    const item = add(text);
-    setDraft("");
-    setCaptureOpen(false);
-    flash(`Captured as ${CATEGORY_LABEL[item.category].toLowerCase()} — nothing sent yet.`);
+  const open = items.filter((i) => i.status !== "handled");
+  const attention = open.filter((i) => i.status === "attention");
+  const waiting = open.filter((i) => i.status === "waiting");
+  const unassigned = attention.filter((i) => i.owner === UNASSIGNED);
+  const mine = attention.filter((i) => i.owner === CURRENT_USER);
+  const others = attention.filter((i) => i.owner !== CURRENT_USER && i.owner !== UNASSIGNED);
+
+  const summary = useMemo(() => {
+    const lines: string[] = [];
+    if (mine.length) lines.push(`${mine.length} need${mine.length === 1 ? "s" : ""} you`);
+    const byOwner = new Map<string, number>();
+    others.forEach((i) => byOwner.set(i.owner, (byOwner.get(i.owner) ?? 0) + 1));
+    byOwner.forEach((n, owner) => lines.push(`${n} need${n === 1 ? "s" : ""} ${owner}`));
+    if (unassigned.length) lines.push(`${unassigned.length} unassigned`);
+    if (waiting.length) lines.push(`${waiting.length} waiting on others`);
+    return lines;
+  }, [mine.length, others, unassigned.length, waiting.length]);
+
+  if (active) {
+    return (
+      <Shell>
+        <Responsibility
+          item={active}
+          onBack={() => setOpenId(null)}
+          onAssign={(o) => {
+            assign(active.id, o);
+            flash(o === UNASSIGNED ? "Left unassigned." : `${o} is now responsible.`);
+          }}
+          onComplete={() => {
+            complete(active.id);
+            setOpenId(null);
+            flash("Marked complete.");
+          }}
+          onReopen={() => {
+            reopen(active.id);
+            flash("Reopened.");
+          }}
+        />
+        <Toast msg={toast} />
+      </Shell>
+    );
   }
 
-  const attention = items.filter((i) => i.status === "attention");
-  const waiting = items.filter((i) => i.status === "waiting");
-  const handled = items.filter((i) => i.status === "handled");
-  const approvals = items.filter((i) => i.status === "attention" && i.proposal && !i.approved);
+  if (captureOpen) {
+    return (
+      <Shell>
+        <Capture
+          onClose={() => setCaptureOpen(false)}
+          onSave={(draft) => {
+            create(draft);
+            setCaptureOpen(false);
+            setScreen("home");
+            flash("Added to your household.");
+          }}
+        />
+        <Toast msg={toast} />
+      </Shell>
+    );
+  }
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-md flex-col bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-border/80 bg-background/90 px-5 pt-[calc(env(safe-area-inset-top)+14px)] pb-3 backdrop-blur">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold tracking-[0.16em] text-muted-foreground uppercase">
-              Daylatch
-            </p>
-            <h1 className="font-display truncate text-[22px] leading-tight font-semibold tracking-tight">
-              {tab === "today"
-                ? counts.attention
-                  ? `${counts.attention} things need you`
-                  : "You're all clear"
-                : tab === "waiting"
-                  ? "Waiting on others"
-                  : tab === "approvals"
-                    ? "Approve before it happens"
-                    : "Your household"}
-            </h1>
-          </div>
-          <span className="flex shrink-0 -space-x-1.5">
-            <Avatar name="Mom" />
-            <Avatar name="Dad" />
-            <Avatar name="Ira" />
-          </span>
+    <Shell>
+      <header className="sticky top-0 z-30 bg-background/92 px-6 pt-[calc(env(safe-area-inset-top)+16px)] pb-3 backdrop-blur">
+        <div className="flex items-center justify-between">
+          <p className="text-[12px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+            Daylatch
+          </p>
+          <Avatar name={CURRENT_USER} className="size-7 text-[11px]" />
         </div>
       </header>
 
-      <main className="flex-1 space-y-6 px-5 pt-5 pb-40">
-        {tab === "today" && (
+      <main className="flex-1 space-y-8 px-6 pt-4 pb-40">
+        {screen === "home" && (
           <>
-            <Group title="Needs attention" tone="attention" count={attention.length}>
-              {attention.map((i) => (
-                <ItemCard key={i.id} item={i} onOpen={() => setOpenId(i.id)} />
-              ))}
-            </Group>
-            <Group title="Recently handled" tone="handled" count={handled.length}>
-              {handled.slice(0, 4).map((i) => (
-                <ItemCard key={i.id} item={i} onOpen={() => setOpenId(i.id)} />
-              ))}
-            </Group>
+            <div>
+              <p className="text-[14px] text-muted-foreground">{greeting()}</p>
+              <h1 className="font-display mt-1 text-[27px] leading-[1.15] font-semibold tracking-tight text-balance">
+                {attention.length
+                  ? `Your household has ${attention.length} thing${attention.length === 1 ? "" : "s"} needing attention.`
+                  : "Your household is in good shape."}
+              </h1>
+              {summary.length ? (
+                <ul className="mt-3 space-y-1">
+                  {summary.map((l) => (
+                    <li key={l} className="flex items-center gap-2 text-[13.5px] text-muted-foreground">
+                      <StatusDot tone="attention" /> {l}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-[13.5px] text-muted-foreground">Nothing is overdue.</p>
+              )}
+            </div>
+
+            <section>
+              <GroupHeader label="Needs attention" count={attention.length} />
+              <div className="mt-3 space-y-2.5">
+                {attention.length ? (
+                  [...mine, ...unassigned, ...others].map((i) => (
+                    <Row key={i.id} item={i} onOpen={() => setOpenId(i.id)} />
+                  ))
+                ) : (
+                  <Empty>Nothing needs you right now.</Empty>
+                )}
+              </div>
+            </section>
+
+            <section className="border-t border-border pt-7">
+              <GroupHeader label="Waiting" count={waiting.length} />
+              <div className="mt-3 space-y-2.5">
+                {waiting.length ? (
+                  waiting.map((i) => <Row key={i.id} item={i} onOpen={() => setOpenId(i.id)} />)
+                ) : (
+                  <Empty>Nothing is waiting on anyone.</Empty>
+                )}
+              </div>
+            </section>
           </>
         )}
 
-        {tab === "waiting" && (
-          <Group title="Waiting" tone="waiting" count={waiting.length}>
-            {waiting.map((i) => (
-              <ItemCard key={i.id} item={i} onOpen={() => setOpenId(i.id)} />
-            ))}
-          </Group>
-        )}
+        {screen === "household" && (
+          <>
+            <div>
+              <p className="eyebrow">Household</p>
+              <h1 className="font-display mt-2 text-[27px] leading-tight font-semibold tracking-tight">
+                {HOUSEHOLD_NAME}
+              </h1>
+              <p className="mt-1 text-[13.5px] text-muted-foreground">{MEMBERS.length} members</p>
+            </div>
 
-        {tab === "approvals" && (
-          <Group title="Needs your approval" tone="attention" count={approvals.length}>
-            {approvals.map((i) => (
-              <div
-                key={i.id}
-                className="rounded-2xl border border-border bg-surface-raised p-4 shadow-card"
-              >
-                <p className="text-[15px] font-medium">{i.title}</p>
-                <p className="mt-1 text-[12.5px] text-muted-foreground">{i.proposal}</p>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    onClick={() => {
-                      update(i.id, { approved: true, status: "waiting", meta: "Sent · awaiting confirmation" });
-                      flash("Approved. Daylatch is handling it.");
-                    }}
-                    className="flex-1 rounded-full bg-primary px-4 py-2.5 text-[13px] font-medium text-primary-foreground"
-                  >
-                    Approve
-                  </button>
-                  <button
-                    onClick={() => {
-                      update(i.id, { proposal: undefined as unknown as string });
-                      flash("Dismissed. Nothing was sent.");
-                    }}
-                    className="flex-1 rounded-full border border-border px-4 py-2.5 text-[13px] font-medium"
-                  >
-                    Not now
-                  </button>
-                </div>
+            <div className="space-y-3">
+              {MEMBERS.map((m) => {
+                const n = open.filter((i) => i.owner === m).length;
+                return (
+                  <div key={m} className="flex items-center gap-3 rounded-2xl border border-border bg-surface-raised px-4 py-3.5 shadow-card">
+                    <Avatar name={m} className="size-8 text-[12px]" />
+                    <div>
+                      <p className="text-[15px] font-medium">{m}</p>
+                      <p className="text-[12.5px] text-muted-foreground">
+                        {n} thing{n === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <section className="border-t border-border pt-7">
+              <GroupHeader label="Who has what" />
+              <div className="mt-4 space-y-6">
+                {[...MEMBERS, UNASSIGNED].map((m) => {
+                  const owned = open.filter((i) => i.owner === m);
+                  if (!owned.length) return null;
+                  return (
+                    <div key={m}>
+                      <p className="text-[14px] font-medium">{m}</p>
+                      <ul className="mt-1.5 space-y-1.5">
+                        {owned.map((i) => (
+                          <li key={i.id}>
+                            <button
+                              onClick={() => setOpenId(i.id)}
+                              className="text-left text-[13.5px] text-muted-foreground"
+                            >
+                              {i.title}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </Group>
-        )}
+            </section>
 
-        {tab === "household" && (
-          <div className="space-y-4">
-            {OWNERS.map((owner) => {
-              const owned = items.filter((i) => i.owner === owner && i.status !== "handled");
-              return (
-                <div
-                  key={owner}
-                  className="rounded-2xl border border-border bg-surface-raised p-4 shadow-card"
-                >
-                  <div className="flex items-center gap-2">
-                    <Avatar name={owner} />
-                    <p className="text-[14px] font-medium">{owner}</p>
-                    <Chip tone={owned.length ? "attention" : "handled"} className="ml-auto">
-                      {owned.length} open
-                    </Chip>
-                  </div>
-                  <div className="mt-2 space-y-1">
-                    {owned.length ? (
-                      owned.map((i) => (
-                        <p key={i.id} className="truncate text-[12.5px] text-muted-foreground">
-                          · {i.title}
-                        </p>
-                      ))
-                    ) : (
-                      <p className="text-[12.5px] text-muted-foreground">Nothing pending.</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            <div className="flex gap-2 pt-2">
+            <div className="flex gap-2 border-t border-border pt-6">
               <button
                 onClick={() => {
                   reset();
@@ -257,190 +475,135 @@ export function MobileApp() {
                 About Daylatch
               </Link>
             </div>
-          </div>
+          </>
         )}
+
+        {screen === "activity" && <ActivityFeed activity={activity} />}
       </main>
 
-      {/* Capture bar + tab bar */}
-      <div className="fixed inset-x-0 bottom-0 z-40 mx-auto w-full max-w-md px-4 pb-[calc(env(safe-area-inset-bottom)+10px)]">
-        <button
-          onClick={() => setCaptureOpen(true)}
-          className="mb-2 flex w-full items-center gap-3 rounded-full border border-dashed border-input bg-surface-raised px-5 py-3 shadow-card"
-        >
-          <span className="text-base leading-none text-primary">＋</span>
-          <span className="text-[13px] text-muted-foreground">Send something to Daylatch</span>
-        </button>
-        <nav className="grid grid-cols-4 rounded-2xl border border-border bg-surface-raised p-1 shadow-float">
-          {TABS.map((t) => {
-            const badge =
-              t.id === "today" ? counts.attention : t.id === "waiting" ? counts.waiting : t.id === "approvals" ? counts.approvals : 0;
-            return (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={cn(
-                  "relative rounded-xl py-2 text-[11px] font-medium transition-colors",
-                  tab === t.id ? "bg-secondary text-foreground" : "text-muted-foreground",
-                )}
-              >
-                <span className="block text-[15px] leading-none">{t.glyph}</span>
-                <span className="mt-1 block">{t.label}</span>
-                {badge ? (
-                  <span className="absolute top-1 right-3 size-1.5 rounded-full bg-attention" />
-                ) : null}
-              </button>
-            );
-          })}
-        </nav>
-      </div>
-
-      {/* Capture sheet */}
-      <Sheet open={captureOpen} onClose={() => setCaptureOpen(false)} title="Capture">
-        <textarea
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          rows={5}
-          placeholder="Paste a bill, forward a message, or type what happened…"
-          className="w-full resize-none rounded-2xl border border-input bg-surface px-4 py-3 text-[14px] outline-none focus:border-ring"
-        />
-        <p className="mt-2 text-[12px] text-muted-foreground">
-          Daylatch reads it, files it, and proposes what to do. Nothing is sent without your
-          approval.
-        </p>
-        <button
-          onClick={submitCapture}
-          className="mt-4 w-full rounded-full bg-primary px-5 py-3 text-[14px] font-medium text-primary-foreground"
-        >
-          Add to household
-        </button>
-      </Sheet>
-
-      {/* Item detail sheet */}
-      <Sheet open={!!active} onClose={() => setOpenId(null)} title={active?.title ?? ""}>
-        {active ? (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Chip tone={active.status}>{statusLabel(active.status)}</Chip>
-              <Chip>{CATEGORY_LABEL[active.category]}</Chip>
-              {active.due ? <Chip tone="waiting">Due {active.due}</Chip> : null}
-            </div>
-            <p className="text-[13px] text-muted-foreground">{active.meta}</p>
-
-            <div>
-              <p className="eyebrow">Owner</p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {OWNERS.map((o) => (
-                  <button
-                    key={o}
-                    onClick={() => update(active.id, { owner: o })}
-                    className={cn(
-                      "rounded-full border px-3 py-1.5 text-[12.5px]",
-                      active.owner === o
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border text-muted-foreground",
-                    )}
-                  >
-                    {o}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="eyebrow">Status</p>
-              <div className="mt-2 flex gap-2">
-                {(["attention", "waiting", "handled"] as Status[]).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => update(active.id, { status: s })}
-                    className={cn(
-                      "flex-1 rounded-full border px-3 py-2 text-[12.5px]",
-                      active.status === s
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border text-muted-foreground",
-                    )}
-                  >
-                    {statusLabel(s)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {active.proposal ? (
-              <div className="rounded-2xl bg-secondary/70 p-4">
-                <p className="eyebrow">Proposed action</p>
-                <p className="mt-1.5 text-[13.5px]">{active.proposal}</p>
-                {active.approved ? (
-                  <p className="mt-2 text-[12px] text-handled">Approved by you</p>
-                ) : (
-                  <button
-                    onClick={() => {
-                      update(active.id, {
-                        approved: true,
-                        status: "waiting",
-                        meta: "Sent · awaiting confirmation",
-                      });
-                      setOpenId(null);
-                      flash("Approved. Daylatch is handling it.");
-                    }}
-                    className="mt-3 w-full rounded-full bg-primary px-4 py-2.5 text-[13px] font-medium text-primary-foreground"
-                  >
-                    Approve and continue
-                  </button>
-                )}
-              </div>
-            ) : null}
-
-            <button
-              onClick={() => {
-                remove(active.id);
-                setOpenId(null);
-                flash("Removed from your household.");
-              }}
-              className="w-full rounded-full border border-border px-4 py-2.5 text-[13px] text-muted-foreground"
-            >
-              Remove
-            </button>
-          </div>
-        ) : null}
-      </Sheet>
-
-      {toast ? (
-        <div className="animate-rise fixed inset-x-0 bottom-32 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-[12.5px] text-background shadow-float">
-          {toast}
+      <nav className="fixed inset-x-0 bottom-0 z-40 mx-auto grid w-full max-w-md grid-cols-3 items-center border-t border-border bg-background/95 px-8 pt-2.5 pb-[calc(env(safe-area-inset-bottom)+12px)] backdrop-blur">
+        <TabButton label="Home" activeTab={screen === "home"} onClick={() => setScreen("home")} />
+        <div className="flex justify-center">
+          <button
+            onClick={() => setCaptureOpen(true)}
+            aria-label="Capture something new"
+            className="-mt-8 flex size-14 items-center justify-center rounded-full bg-primary text-[24px] leading-none text-primary-foreground shadow-float transition-transform active:scale-95"
+          >
+            ＋
+          </button>
         </div>
-      ) : null}
+        <div className="grid grid-cols-2">
+          <TabButton
+            label="House"
+            activeTab={screen === "household"}
+            onClick={() => setScreen("household")}
+          />
+          <TabButton
+            label="Activity"
+            activeTab={screen === "activity"}
+            onClick={() => setScreen("activity")}
+          />
+        </div>
+      </nav>
+
+      <Toast msg={toast} />
+    </Shell>
+  );
+}
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mx-auto flex min-h-screen w-full max-w-md flex-col bg-background">{children}</div>
+  );
+}
+
+function TabButton({
+  label,
+  activeTab,
+  onClick,
+}: {
+  label: string;
+  activeTab: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "text-[11.5px] font-medium tracking-wide transition-colors",
+        activeTab ? "text-foreground" : "text-muted-foreground",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+function Toast({ msg }: { msg: string | null }) {
+  if (!msg) return null;
+  return (
+    <div className="animate-rise fixed inset-x-0 bottom-28 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-[12.5px] text-background shadow-float">
+      {msg}
     </div>
   );
 }
 
-function Group({
-  title,
-  tone,
-  count,
-  children,
-}: {
-  title: string;
-  tone: "attention" | "waiting" | "handled";
-  count: number;
-  children: React.ReactNode;
-}) {
+function ActivityFeed({ activity }: { activity: Activity[] }) {
+  const groups = useMemo(() => {
+    const map = new Map<string, Activity[]>();
+    const today = new Date().toDateString();
+    const yesterday = new Date(Date.now() - 8.64e7).toDateString();
+    [...activity]
+      .sort((a, b) => b.ts - a.ts)
+      .forEach((a) => {
+        const d = new Date(a.ts).toDateString();
+        const label =
+          d === today
+            ? "Today"
+            : d === yesterday
+              ? "Yesterday"
+              : new Date(a.ts).toLocaleDateString(undefined, { month: "long", day: "numeric" });
+        map.set(label, [...(map.get(label) ?? []), a]);
+      });
+    return [...map.entries()];
+  }, [activity]);
+
   return (
-    <section>
-      <div className="flex items-center justify-between px-1">
-        <p className="flex items-center gap-2 text-[11px] font-semibold tracking-wide uppercase">
-          <StatusDot tone={tone} /> {title}
-        </p>
-        <Chip tone={tone}>{count}</Chip>
+    <>
+      <div>
+        <p className="eyebrow">Activity</p>
+        <h1 className="font-display mt-2 text-[27px] leading-tight font-semibold tracking-tight">
+          What your household has been doing
+        </h1>
       </div>
-      <div className="mt-2.5 space-y-2.5">
-        {count ? children : (
-          <p className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground">
-            Nothing here right now.
-          </p>
-        )}
-      </div>
-    </section>
+      {groups.length ? (
+        groups.map(([label, entries]) => (
+          <section key={label}>
+            <GroupHeader label={label} />
+            <ul className="mt-3 space-y-4 border-l border-border pl-4">
+              {entries.map((a) => (
+                <li key={a.id}>
+                  <p className="text-[14px]">
+                    <span className="font-medium">{a.actor}</span>{" "}
+                    <span className="text-muted-foreground">{a.verb}</span>
+                  </p>
+                  <p className="text-[13.5px] text-muted-foreground">{a.subject}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))
+      ) : (
+        <Empty>Nothing has happened yet.</Empty>
+      )}
+    </>
   );
 }
