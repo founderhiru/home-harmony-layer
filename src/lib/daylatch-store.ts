@@ -305,9 +305,11 @@ export function useItems() {
       setItems((prev) => {
         const item = prev.find((i) => i.id === id);
         if (item) log("You", "reopened", item.title);
-        return prev.map((i) =>
-          i.id === id ? { ...i, status: "attention" as Status, completedAt: undefined } : i,
-        );
+        return prev.map((i) => {
+          if (i.id !== id) return i;
+          const { completedAt: _done, ...rest } = i;
+          return { ...rest, status: "attention" as Status };
+        });
       });
     },
     [log],
